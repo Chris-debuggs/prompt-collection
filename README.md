@@ -1,1 +1,1 @@
-# prompt-collection
+# Prompt Collection
