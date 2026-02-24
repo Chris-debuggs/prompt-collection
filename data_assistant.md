@@ -1,9 +1,3 @@
-Perfect. You want the same content, but cleaned up into proper Markdown — no inline HTML styling, structured like a technical report, readable in GitHub.
-
-Here is your reorganized section rewritten cleanly.
-
----
-
 ## Tables
 
 The system operates over two TinyDB tables: `inventory_tbl` and `transactions_tbl`.
