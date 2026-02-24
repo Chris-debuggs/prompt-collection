@@ -1,15 +1,43 @@
-## Prompt 3
+---
 
-### 3.1. Use an LLM to Query a Database
+# Prompt 3 — LLM-Powered SQL Query Generation with Reflection
 
-In this step, you will use a function that turns your natural-language questions into SQL queries.
+## 1. Overview
 
-You provide your question and the database schema as input. The LLM then generates the SQL query that answers your question.
+In this section, the system uses a Large Language Model (LLM) to:
 
-This way, **you** can focus on asking questions while the model takes care of writing the query.
+1. Convert natural-language questions into SQL queries
+2. Execute those queries
+3. Reflect on correctness
+4. Improve the query if necessary
 
+The goal is to let the user focus on asking questions, while the model handles SQL generation and refinement.
 
-````python
+This workflow consists of:
+
+* Query generation
+* Logical reflection
+* Execution feedback reflection
+* Final validated result
+
+---
+
+# 2. Step 1 — Generate SQL from Natural Language
+
+The first function converts a natural-language question into a valid SQLite query.
+
+The model is given:
+
+* The database schema
+* The user’s question
+
+It must return only SQL.
+
+---
+
+## 2.1 SQL Generation Function
+
+```python
 def generate_sql(question: str, schema: str, model: str) -> str:
     prompt = f"""
     You are a SQL assistant. Given the schema and the user's question, write a SQL query for SQLite.
@@ -28,13 +56,19 @@ def generate_sql(question: str, schema: str, model: str) -> str:
         temperature=0,
     )
     return response.choices[0].message.content.strip()
-````
+```
 
-----
-````python
-# Example usage of generate_sql
+### Design Notes
 
-# We provide the schema as a string
+* `temperature=0` ensures deterministic SQL generation.
+* The model is restricted to SQLite syntax.
+* The output must contain only SQL (no explanation).
+
+---
+
+## 2.2 Example Usage
+
+```python
 schema = """
 Table name: transactions
 id (INTEGER)
@@ -50,46 +84,55 @@ notes (TEXT)
 ts (DATETIME)
 """
 
-# We ask a question about the data in natural language
 question = "Which color of product has the highest total sales?"
 
-utils.print_html(question, title="User Question")
+sql_v1 = generate_sql(question, schema, model="openai:gpt-4.1")
+```
 
-# Generate the SQL query using the specified model
-sql_V1 = generate_sql(question, schema, model="openai:gpt-4.1")
+At this stage:
 
-# Display the generated SQL query
-utils.print_html(sql_V1, title="SQL Query V1")
-````
-----
-### Improving SQL Queries with Reflection
+* The model produces SQL (Version 1)
+* The query has not yet been validated against real data
 
-In this section, you will learn how to **improve SQL queries using reflection**.
+---
 
-First, the LLM can review only the **SQL text** against the question and schema, and propose improvements if needed.
-Then, the LLM can also consider the **actual query execution results** to catch subtle issues such as negative totals, missing filters, or grouping errors.
+# 3. Improving SQL Queries with Reflection
 
-Together, these approaches show how reflection makes your SQL workflow more **reliable and accurate**—by first checking the logic on paper and then validating it against real data.
+Initial SQL may be syntactically correct but logically incomplete.
 
-#### First Attempt: Refine a SQL query
+Common issues:
 
-In this function, you ask an LLM to **review** a SQL query against the original question and the schema (e.g., as the one defined in section 3.1.). The model reflects on whether the query fully answers the question and, if not, proposes an improved version.
+* Missing filters
+* Incorrect grouping
+* Incorrect aggregation
+* Ignoring negative values
+* Wrong interpretation of "sales"
 
-* **Inputs**:
+Reflection improves reliability.
 
-  * the user’s **question**
-  * the **original SQL query**
-  * the **table schema**
+Two levels of reflection are used:
 
-* **Outputs**:
+1. Logical reflection (review SQL text only)
+2. Execution-based reflection (review actual results)
 
-  * **feedback** → a short evaluation (e.g., “valid but missing a date filter”)
-  * **refined_sql** → the final SQL (unchanged if correct, or updated if improvements are needed)
+---
 
-This function does **not execute SQL**. It only inspects the query and suggests refinements when the logic doesn’t perfectly match the intent.
+# 4. Step 2 — Logical Reflection on SQL
 
+This function evaluates whether the SQL logically answers the question.
 
-````python
+It does not execute SQL.
+It inspects only:
+
+* The original question
+* The SQL query
+* The schema
+
+---
+
+## 4.1 SQL Refinement Function
+
+```python
 def refine_sql(
     question: str,
     sql_query: str,
@@ -137,34 +180,55 @@ Return STRICT JSON with two fields:
         if not refined_sql:
             refined_sql = sql_query
     except Exception:
-        # Fallback if model doesn't return valid JSON
         feedback = content.strip()
         refined_sql = sql_query
 
     return feedback, refined_sql
-````
+```
 
-----
-### Putting it all together — Building the Database Query Workflow
+### Why JSON Output?
 
-In this step, **you** will use a function that automates the entire workflow of creating, running, and improving SQL queries with an LLM.
+Structured JSON ensures:
 
-The workflow runs through these key steps:
+* Stable parsing
+* Predictable workflow integration
+* Safe fallback handling
 
-1. **Extract the database schema**
-2. **Generate an initial (V1) SQL query** from your natural language question
-3. **Reflect on V1 using execution feedback** — review the actual query results and refine the SQL if needed
-4. **Execute the improved (V2) SQL query** to ensure it fully answers your question
+---
 
-At the end, **you** will see:
+# 5. Step 3 — Execution-Based Reflection
 
-* Both the initial and refined queries
-* Their respective outputs
-* Feedback from the LLM explaining the refinement
+Logical reflection checks reasoning “on paper.”
 
-This makes it easier for **you** to work with SQL queries in a smoother, more accurate, and fully automated way.
+Execution-based reflection checks the real output.
 
-````python
+This catches subtle issues such as:
+
+* Negative totals from returns
+* Missing `WHERE action='sale'`
+* Incorrect grouping
+* Null values
+
+This produces a refined Version 2 (V2) query.
+
+---
+
+# 6. End-to-End SQL Workflow
+
+The full pipeline integrates:
+
+1. Schema extraction
+2. SQL generation (V1)
+3. Execution of V1
+4. Reflection with execution feedback
+5. SQL refinement (V2)
+6. Execution of V2
+
+---
+
+## 6.1 Workflow Function
+
+```python
 def run_sql_workflow(
     db_path: str,
     question: str,
@@ -173,81 +237,99 @@ def run_sql_workflow(
 ):
     """
     End-to-end workflow to generate, execute, evaluate, and refine SQL queries.
-
-    Steps:
-      1) Extract database schema
-      2) Generate SQL (V1)
-      3) Execute V1 → show output
-      4) Reflect on V1 with execution feedback → propose refined SQL (V2)
-      5) Execute V2 → show final answer
     """
 
-    # 1) Schema
+    # 1) Extract Schema
     schema = utils.get_schema(db_path)
-    utils.print_html(
-        schema,
-        title="📘 Step 1 — Extract Database Schema"
-    )
+    utils.print_html(schema, title="Step 1 — Extract Database Schema")
 
     # 2) Generate SQL (V1)
     sql_v1 = generate_sql(question, schema, model_generation)
-    utils.print_html(
-        sql_v1,
-        title="🧠 Step 2 — Generate SQL (V1)"
-    )
+    utils.print_html(sql_v1, title="Step 2 — Generate SQL (V1)")
 
     # 3) Execute V1
     df_v1 = utils.execute_sql(sql_v1, db_path)
-    utils.print_html(
-        df_v1,
-        title="🧪 Step 3 — Execute V1 (SQL Output)"
-    )
+    utils.print_html(df_v1, title="Step 3 — Execute V1")
 
-    # 4) Reflect on V1 with execution feedback → refine to V2
+    # 4) Reflect and refine to V2
     feedback, sql_v2 = refine_sql_external_feedback(
         question=question,
         sql_query=sql_v1,
-        df_feedback=df_v1,          # external feedback: real output of V1
+        df_feedback=df_v1,
         schema=schema,
         model=model_evaluation,
     )
-    utils.print_html(
-        feedback,
-        title="🧭 Step 4 — Reflect on V1 (Feedback)"
-    )
-    utils.print_html(
-        sql_v2,
-        title="🔁 Step 4 — Refined SQL (V2)"
-    )
+    utils.print_html(feedback, title="Step 4 — Reflection Feedback")
+    utils.print_html(sql_v2, title="Step 4 — Refined SQL (V2)")
 
     # 5) Execute V2
     df_v2 = utils.execute_sql(sql_v2, db_path)
-    utils.print_html(
-        df_v2,
-        title="✅ Step 5 — Execute V2 (Final Answer)"
-    )
-````
+    utils.print_html(df_v2, title="Step 5 — Final Answer (V2)")
+```
 
-----
-### Run the SQL Workflow
+---
 
-Now it’s time for **you** to execute the complete SQL processing pipeline. You can try different combinations of the following OpenAI models, each with different capabilities and performance:
+# 7. Running the Workflow
+
+```python
+run_sql_workflow(
+    "products.db",
+    "Which color of product has the highest total sales?",
+    model_generation="openai:gpt-4.1",
+    model_evaluation="openai:gpt-4.1"
+)
+```
+
+---
+
+# 8. Model Selection Considerations
+
+Available models:
 
 * `openai:gpt-4o`
 * `openai:gpt-4.1`
 * `openai:gpt-4.1-mini`
 * `openai:gpt-3.5-turbo`
 
-💡 In this workflow, `openai:gpt-4.1` often gives the best results for self-reflection tasks.
+Observations:
 
-**Important:** Because Large Language Models (LLMs) are stochastic, every run may return slightly different results.
-You are encouraged to experiment with different models and combinations to find the setup that works best for **you**.
+* `gpt-4.1` performs best for reflection-heavy tasks.
+* Lower-tier models may require multiple iterations.
+* Results are stochastic; outputs may vary slightly per run.
 
-````python
-run_sql_workflow(
-    "products.db", 
-    "Which color of product has the highest total sales?",
-    model_generation="openai:gpt-4.1",
-    model_evaluation="openai:gpt-4.1"
-)
-````
+---
+
+# 9. Architectural Pattern
+
+This workflow demonstrates a broader principle:
+
+Initial generation is fast.
+Reflection improves reliability.
+Execution feedback improves correctness.
+
+The full pipeline becomes:
+
+Natural Language
+→ SQL (V1)
+→ Execute
+→ Reflect
+→ Refine (V2)
+→ Execute
+→ Final Answer
+
+This pattern generalizes beyond SQL to:
+
+* Data pipelines
+* Code generation
+* API orchestration
+* Automated analytics
+
+---
+
+# 10. Key Insight
+
+LLMs are good at generating.
+They become significantly better when allowed to critique themselves.
+
+Generation + Reflection + Execution Feedback
+creates a far more reliable system than single-pass generation alone.
