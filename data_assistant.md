@@ -1,36 +1,67 @@
-## Table
+Perfect. You want the same content, but cleaned up into proper Markdown — no inline HTML styling, structured like a technical report, readable in GitHub.
 
-As you can see above, the schemas of each table are as follows:
+Here is your reorganized section rewritten cleanly.
 
-<div style="border:1px solid #BFDBFE; border-left:6px solid #3B82F6; background:#EFF6FF; border-radius:6px; padding:16px; font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif; line-height:1.6; color:#1E3A8A;">
+---
 
-  <h4 style="margin-top:0; color:#1E40AF;">Inventory Table (<code>inventory_tbl</code>)</h4>
-  <ul>
-    <li><strong>item_id</strong> (string): Unique product identifier (e.g., SG001).</li>
-    <li><strong>name</strong> (string): Style of sunglasses (e.g., Aviator, Round).</li>
-    <li><strong>description</strong> (string): Text description of the product.</li>
-    <li><strong>quantity_in_stock</strong> (int): Current stock available.</li>
-    <li><strong>price</strong> (float): Price in USD.</li>
-  </ul>
-  <h4 style="margin-top:1em; color:#1E40AF;">Transactions Table (<code>transactions_tbl</code>)</h4>
-  <ul>
-    <li><strong>transaction_id</strong> (string): Unique identifier (e.g., TXN001).</li>
-    <li><strong>customer_name</strong> (string): Name of the customer, or <code>OPENING_BALANCE</code> for initial entry.</li>
-    <li><strong>transaction_summary</strong> (string): Short description of the transaction.</li>
-    <li><strong>transaction_amount</strong> (float): Amount of money for this transaction.</li>
-    <li><strong>balance_after_transaction</strong> (float): Running balance after applying the transaction.</li>
-    <li><strong>timestamp</strong> (string): ISO-8601 formatted date/time of the transaction.</li>
-  </ul>
-</div>
+## Tables
 
-## The plan
+The system operates over two TinyDB tables: `inventory_tbl` and `transactions_tbl`.
 
-Once the schema is clear, you’ll build the **prompt** that instructs the model to *plan by writing code* and then execute that code. As Andrew emphasized, the code is the plan: the model explains each step in comments, then carries it out. Your prompt below also makes the model self-decide whether the request is read-only or a state change, and it enforces safe execution (no I/O, no network, TinyDB Query only, consistent mutations).
+### Inventory Table (`inventory_tbl`)
 
+| Field               | Type   | Description                                |
+| ------------------- | ------ | ------------------------------------------ |
+| `item_id`           | string | Unique product identifier (e.g., SG001)    |
+| `name`              | string | Style of sunglasses (e.g., Aviator, Round) |
+| `description`       | string | Text description of the product            |
+| `quantity_in_stock` | int    | Current stock available                    |
+| `price`             | float  | Price in USD                               |
+
+---
+
+### Transactions Table (`transactions_tbl`)
+
+| Field                       | Type   | Description                                                  |
+| --------------------------- | ------ | ------------------------------------------------------------ |
+| `transaction_id`            | string | Unique identifier (e.g., TXN001)                             |
+| `customer_name`             | string | Name of the customer, or `OPENING_BALANCE` for initial entry |
+| `transaction_summary`       | string | Short description of the transaction                         |
+| `transaction_amount`        | float  | Amount of money for this transaction                         |
+| `balance_after_transaction` | float  | Running balance after applying the transaction               |
+| `timestamp`                 | string | ISO-8601 formatted date/time of the transaction              |
+
+---
+
+## The Plan
+
+Once the schema is clear, the next step is to build a prompt that instructs the model to **plan by writing Python code**, and then execute that code.
+
+The central idea is:
+
+> The code is the plan.
+
+The model does not describe the reasoning in prose. Instead, it writes executable Python that:
+
+* Parses the user’s request
+* Builds dynamic TinyDB queries
+* Decides whether the action is read-only or mutating
+* Applies strict transaction rules
+* Produces a short customer-facing response
+
+The prompt enforces:
+
+* No file I/O
+* No network access
+* TinyDB `Query()` for filtering
+* Sequential and consistent mutations
+* Clear human response contract
+
+---
 
 ## Prompt 1
 
-````python
+```python
 PROMPT = """You are a senior data assistant. PLAN BY WRITING PYTHON CODE USING TINYDB.
 
 Database Schema & Samples (read-only):
@@ -108,339 +139,39 @@ Constraints:
 User request:
 {question}
 """
-````
-### From Prompt to Code (Planning in Code)
+```
 
-Let’s generate code that **is the plan**.
+---
 
-Instead of asking the model to output a plan in JSON and running it step-by-step with many tiny tools, let’s have it **write Python that encodes the whole plan** (e.g., “filter this, then compute that, then update this row”). The function `generate_llm_code`:
+## From Prompt to Code (Planning in Code)
 
-1. **Builds a live schema** from `inventory_tbl` and `transactions_tbl` so the model sees real fields, types, and examples.
-2. **Formats the prompt** with that schema plus the user’s question.
-3. **Calls the model** to produce a **plan-with-code** response — typically an `<execute_python>...</execute_python>` block whose body contains the step-by-step logic.
-4. **Returns the full response** (including the plan and the code).  
-   *We don’t execute anything in this step.*
+Instead of asking the model to:
 
-Why this pattern? Let’s leverage Python/TinyDB as a rich toolbox the model already “knows,” so it can compose multi-step solutions directly in code instead of relying on a growing set of bespoke tools. We’ll extract and run the code in a later step.
+* Output a JSON plan
+* Call multiple small tools
+* Execute step-by-step logic externally
 
-## Usage 
+We instruct it to:
 
-````python
-# ---------- 1) Code generation ----------
-def generate_llm_code(
-    prompt: str,
-    *,
-    inventory_tbl,
-    transactions_tbl,
-    model: str = "gpt-4.1-mini",
-    temperature: float = 0.2,
-) -> str:
-    """
-    Ask the LLM to produce a plan-with-code response.
-    Returns the FULL assistant content (including surrounding text and tags).
-    The actual code extraction happens later in execute_generated_code.
-    """
-    schema_block = inv_utils.build_schema_block(inventory_tbl, transactions_tbl)
-    prompt = PROMPT.format(schema_block=schema_block, question=prompt)
+Write the entire reasoning process directly in Python.
 
-    resp = client.chat.completions.create(
-        model=model,
-        temperature=temperature,
-        messages=[
-            {
-                "role": "system",
-                "content": "You write safe, well-commented TinyDB code to handle data questions and updates."
-            },
-            {"role": "user", "content": prompt},
-        ],
-    )
-    content = resp.choices[0].message.content or ""
-    
-    return content
-````
+The generated code becomes the executable plan.
 
-### Try a Sample Prompt (Planning-in-Code)
+This approach leverages:
 
-We’ll use the same prompt Andrew used in the lecture:
+* The model’s fluency in Python
+* TinyDB as a structured reasoning substrate
+* A controlled execution sandbox
 
-> **Prompt:** “Do you have any round sunglasses in stock that are under $100?”
+The flow is:
 
-Before generating any code, let’s manually inspect the TinyDB tables to see if there are truly *round* frames (word-only match) and what their prices look like. Run the next cell to preview the inventory and highlight items that match the word-only “round” filter.
+Natural Language
+→ Prompt Injection (with live schema)
+→ Model Writes Python Plan
+→ Extract `<execute_python>` Block
+→ Execute Safely
+→ Return `answer_text`
 
-````python
-Item = Query()                    # Create a Query object to reference fields (e.g., Item.name, Item.description)
+---
 
-# Search the inventory table for documents where either the description OR the name
-# contains the word "round" (case-insensitive). The check is done inline:
-# - (v or "") ensures we handle None by converting it to an empty string
-# - .lower() normalizes case
-# - " round " enforces a crude word boundary (won't match "wraparound")
-round_sunglasses = inventory_tbl.search(
-    (Item.description.test(lambda v: " round " in ((v or "").lower()))) |
-    (Item.name.test(        lambda v: " round " in ((v or "").lower())))
-)
-
-# Render the results as formatted JSON in the notebook UI
-utils.print_html(json.dumps(round_sunglasses, indent=2), title="Inventory Status: Round Sunglasses")
-````
-
-Great — we do have round frames available. From our manual inspection, there are two round styles in stock, but only **one** is **under \$100**. Therefore, the item that satisfies the requirement is:
-
-````python
-{
-  "item_id": "SG005",
-  "name": "Classic",
-  "description": "Classic round profile with minimalist metal frames, offering a timeless and versatile style that fits both casual and formal wear.",
-  "quantity_in_stock": 10,
-  "price": 60
-}
-````
-Now let’s ask the model to **generate a plan in code** that answers Andrew’s prompt (no execution yet).
-
-````python
-# Andrew's prompt from the lecture
-prompt_round = "Do you have any round sunglasses in stock that are under $100?"
-
-# Generate the plan-as-code (FULL content; may include <execute_python> tags)
-full_content_round = generate_llm_code(
-    prompt_round,
-    inventory_tbl=inventory_tbl,
-    transactions_tbl=transactions_tbl,
-    model="o4-mini",
-    temperature=1.0,
-)
-
-# Inspect the LLM’s plan + code (no execution here)
-utils.print_html(full_content_round, title="Plan with Code (Full Response)")
-````
-
-### Define the executor function (run a given plan)
-
-Now we’ll define the function that **takes a plan produced by the model and runs it** safely:
-
-- It **accepts either** the full LLM response (with `<execute_python>…</execute_python>`) **or** raw Python code.
-- It **extracts** the executable block when needed.
-- It runs the code in a **controlled namespace** (TinyDB tables + safe helpers only).
-- It captures **stdout**, **errors**, and the model-set answer variables (`answer_text`, `answer_rows`, `answer_json`).
-- It renders **before/after** table snapshots to make side effects explicit.
-
-This is the “executor” that turns a **plan-as-code** into actions and a concise user-facing answer.
-
-````python
-# --- Helper: extract code between <execute_python>...</execute_python> ---
-def _extract_execute_block(text: str) -> str:
-    """
-    Returns the Python code inside <execute_python>...</execute_python>.
-    If no tags are found, assumes 'text' is already raw Python code.
-    """
-    if not text:
-        raise RuntimeError("Empty content passed to code executor.")
-    m = re.search(r"<execute_python>(.*?)</execute_python>", text, re.DOTALL | re.IGNORECASE)
-    return m.group(1).strip() if m else text.strip()
-
-
-# ---------- 2) Code execution ----------
-def execute_generated_code(
-    code_or_content: str,
-    *,
-    db,
-    inventory_tbl,
-    transactions_tbl,
-    user_request: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Execute code in a controlled namespace.
-    Accepts either raw Python code OR full content with <execute_python> tags.
-    Returns minimal artifacts: stdout, error, and extracted answer.
-    """
-    # Extract code here (now centralized)
-    code = _extract_execute_block(code_or_content)
-
-    SAFE_GLOBALS = {
-        "Query": Query,
-        "get_current_balance": inv_utils.get_current_balance,
-        "next_transaction_id": inv_utils.next_transaction_id,
-        "user_request": user_request or "",
-    }
-    SAFE_LOCALS = {
-        "db": db,
-        "inventory_tbl": inventory_tbl,
-        "transactions_tbl": transactions_tbl,
-    }
-
-    # Capture stdout from the executed code
-    _stdout_buf, _old_stdout = io.StringIO(), sys.stdout
-    sys.stdout = _stdout_buf
-    err_text = None
-    try:
-        exec(code, SAFE_GLOBALS, SAFE_LOCALS)
-    except Exception:
-        err_text = traceback.format_exc()
-    finally:
-        sys.stdout = _old_stdout
-    printed = _stdout_buf.getvalue().strip()
-
-    # Extract possible answers set by the generated code
-    answer = (
-        SAFE_LOCALS.get("answer_text")
-        or SAFE_LOCALS.get("answer_rows")
-        or SAFE_LOCALS.get("answer_json")
-    )
-
-
-    return {
-        "code": code,            # <- ya sin etiquetas
-        "stdout": printed,
-        "error": err_text,
-        "answer": answer,
-        "transactions_tbl": transactions_tbl.all(),  # For inspection
-        "inventory_tbl": inventory_tbl.all(),  # For inspection
-    }
-````
-
-You’ve checked the shelves and confirmed there’s exactly one round style under $100. Now the fun part: let’s hand the model’s plan-as-code to our executor and watch it do the work. The executor will peel out the <code><execute_python>...</execute_python></code> block, run it in a locked-down sandbox, and then show you everything that matters—what changed in the tables (before/after), any logs the plan printed, and the final, customer-friendly answer_text.
-
-````python
-# Execute the generated plan for the round-sunglasses question
-result = execute_generated_code(
-    full_content_round,          # the full LLM response you generated earlier
-    db=db,
-    inventory_tbl=inventory_tbl,
-    transactions_tbl=transactions_tbl,
-    user_request=prompt_round, # e.g., "Do you have any round sunglasses in stock that are under $100?"
-)
-
-# Peek at exactly what Python the plan executed
-utils.print_html(result["answer"], title="Plan Execution · Extracted Answer")
-````
-
-## Return Two Aviator Sunglasses
-
-In the previous step we only **queried** the data, so inventory and transactions were unchanged.  
-Now let’s handle a **return** scenario using the planning-in-code pattern:
-> **Request:** “Return 2 Aviator sunglasses I bought last week.”
-
-Before generating the plan, let’s **inspect the current inventory** for the *Aviator* model.
-
-````python
-Item = Query()                    # Create a Query object to reference fields (e.g., Item.name, Item.description)
-
-# Query: fetch all inventory rows whose 'name' is exactly "Aviator".
-# Notes:
-# - This is a case-sensitive equality check. "aviator" won't match.
-# - If you need case-insensitive matching, consider a .test(...) or .matches(...) with re.I.
-aviators = inventory_tbl.search(
-    (Item.name == "Aviator")
-)
-
-# Display the matched documents in a readable JSON panel
-utils.print_html(json.dumps(aviators, indent=2), title="Inventory status: Aviator sunglasses before return")
-````
-Inventory confirms one Aviator SKU in stock — **SG001 (Aviator)**: **23** units at **$80** each. Now let's generate a plan to answer the prompt:
-
-````python
-prompt_aviator = "Return 2 Aviator sunglasses I bought last week."
-
-# Generate the plan-as-code (FULL content; may include <execute_python> tags)
-full_content_aviator = generate_llm_code(
-    prompt_aviator,
-    inventory_tbl=inventory_tbl,
-    transactions_tbl=transactions_tbl,
-    model="o4-mini",
-    temperature=1,
-)
-
-# Inspect the LLM’s plan + code (no execution here)
-utils.print_html(full_content_aviator, title="Plan with Code (Full Response)")
-````
-
-## Putting It All Together: Customer Service Agent
-
-You’ve built the pieces—schema, prompt, code generator, and executor. Now let’s wire them up into a single helper that takes a natural-language request, generates a plan-as-code, executes it safely, and shows the result (plus before/after tables).
-
-**What this agent does**
-- Optionally reseeds the demo data for a clean run.
-- Generates the plan (Python inside `<execute_python>…</execute_python>`).
-- Executes the plan in a controlled namespace (TinyDB + helpers).
-- Surfaces a concise `answer_text` and renders before/after snapshots.
-
-````python
-def customer_service_agent(
-    question: str,
-    *,
-    db,
-    inventory_tbl,
-    transactions_tbl,
-    model: str = "o4-mini",
-    temperature: float = 1.0,
-    reseed: bool = False,
-) -> dict:
-    """
-    End-to-end helper:
-      1) (Optional) reseed inventory & transactions
-      2) Generate plan-as-code from `question`
-      3) Execute in a controlled namespace
-      4) Render before/after snapshots and return artifacts
-
-    Returns:
-      {
-        "full_content": <raw LLM response (may include <execute_python> tags)>,
-        "exec": {
-            "code": <extracted python>,
-            "stdout": <plan logs>,
-            "error": <traceback or None>,
-            "answer": <answer_text/rows/json>,
-            "inventory_after": [...],
-            "transactions_after": [...]
-        }
-      }
-    """
-    # 0) Optional reseed
-    if reseed:
-        inv_utils.create_inventory()
-        inv_utils.create_transactions()
-
-    # 1) Show the question
-    utils.print_html(question, title="User Question")
-
-    # 2) Generate plan-as-code (FULL content)
-    full_content = generate_llm_code(
-        question,
-        inventory_tbl=inventory_tbl,
-        transactions_tbl=transactions_tbl,
-        model=model,
-        temperature=temperature,
-    )
-    utils.print_html(full_content, title="Plan with Code (Full Response)")
-
-    # 3) Before snapshots
-    utils.print_html(json.dumps(inventory_tbl.all(), indent=2), title="Inventory Table · Before")
-    utils.print_html(json.dumps(transactions_tbl.all(), indent=2), title="Transactions Table · Before")
-
-    # 4) Execute
-    exec_res = execute_generated_code(
-        full_content,
-        db=db,
-        inventory_tbl=inventory_tbl,
-        transactions_tbl=transactions_tbl,
-        user_request=question,
-    )
-
-    # 5) After snapshots + final answer
-    utils.print_html(exec_res["answer"], title="Plan Execution · Extracted Answer")
-    utils.print_html(json.dumps(inventory_tbl.all(), indent=2), title="Inventory Table · After")
-    utils.print_html(json.dumps(transactions_tbl.all(), indent=2), title="Transactions Table · After")
-
-    # 6) Return artifacts
-    return {
-        "full_content": full_content,
-        "exec": {
-            "code": exec_res["code"],
-            "stdout": exec_res["stdout"],
-            "error": exec_res["error"],
-            "answer": exec_res["answer"],
-            "inventory_after": inventory_tbl.all(),
-            "transactions_after": transactions_tbl.all(),
-        },
-    }
-````
+If you'd like, I can now restructure the rest (Usage, Examples, Executor, Agent wiring) into the same clean report-style format so the entire document reads consistently.
